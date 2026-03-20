@@ -12,6 +12,8 @@ import baize.code.java.utils.KeyUtils;
 import baize.code.java.websocket.endpoint.UserServiceEndpoint;
 import baize.code.java.websocket.message.ChatMessage;
 import cn.hutool.json.JSONUtil;
+import com.alibaba.cloud.ai.dashscope.agent.DashScopeAgent;
+import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatModel;
 import jakarta.websocket.EncodeException;
 import jakarta.websocket.Session;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +22,9 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.PromptTemplate;
 import org.springframework.ai.rag.advisor.RetrievalAugmentationAdvisor;
+import org.springframework.ai.rag.generation.augmentation.ContextualQueryAugmenter;
+import org.springframework.ai.rag.preretrieval.query.transformation.RewriteQueryTransformer;
+import org.springframework.ai.rag.preretrieval.query.transformation.TranslationQueryTransformer;
 import org.springframework.ai.rag.retrieval.search.VectorStoreDocumentRetriever;
 import org.springframework.ai.template.st.StTemplateRenderer;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -57,6 +62,8 @@ public class AIServiceImpl implements AIService {
     private VectorStoreDocumentRetriever vectorStoreDocumentRetriever;
     @Autowired
     private VectorStore vectorStore;
+    @Autowired
+    private DashScopeChatModel dashScopeChatModel;
     
     @Value("${session.key}")
     private String sessionKey;
@@ -70,6 +77,10 @@ public class AIServiceImpl implements AIService {
     private Double threshold;
     @Value("${retrieval.number}")
     private Integer number;
+    @Value("classpath:template/relevant-information-cannot-be-retrieved.st")
+    private Resource relevantInformationCannotBeRetrievedResource;
+    @Value("classpath:template/query-optimization.st")
+    private Resource queryOptimizationResource;
     /**
      * 判断是否需要转人工
      * @param message
@@ -178,7 +189,24 @@ public class AIServiceImpl implements AIService {
                                                         )
                                                 )
                                                 .build() // 构建文档检索器
-                                )
+                                )//配置查询增强器
+                                .queryAugmenter(ContextualQueryAugmenter.builder()
+                                        .allowEmptyContext(false)
+                                        .emptyContextPromptTemplate(promptTemplate.builder()
+                                                .resource(relevantInformationCannotBeRetrievedResource)
+                                                .build())
+                                        .build())
+                                .queryTransformers(TranslationQueryTransformer.builder()
+                                        .chatClientBuilder(ChatClient.builder(dashScopeChatModel))//配置翻译所使用的ai
+                                        .targetLanguage("chinese") //【配置需要的语言】
+                                        .build())
+                                .queryTransformers(RewriteQueryTransformer.builder()
+                                        .chatClientBuilder(ChatClient.builder(dashScopeChatModel))
+                                        .targetSearchSystem("商品客服小助手")
+                                        .promptTemplate(promptTemplate.builder()
+                                                .resource(queryOptimizationResource)
+                                                .build())
+                                        .build())
                                 .build() // 完成 RetrievalAugmentationAdvisor 构建
                 )
                 .stream() // 使用流式调用
